@@ -1,0 +1,43 @@
+name: BE CI
+
+# Backend build + tests. Runs only when be/ changes (or this file).
+on:
+  push:
+    branches: [staging, main]
+    paths: ['be/**', '.github/workflows/be.yml']
+  pull_request:
+    branches: [staging, main]
+    paths: ['be/**', '.github/workflows/be.yml']
+
+concurrency:
+  group: be-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: be
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('be/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - run: dotnet restore
+      - run: dotnet build --no-restore --configuration Release
+
+      # Unit + integration; the integration suite spins up Postgres via
+      # Testcontainers — GHA ubuntu runners ship Docker, so it just works.
+      - name: tests
+        run: dotnet test --no-build --configuration Release --logger "console;verbosity=normal"
