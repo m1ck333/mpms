@@ -1,0 +1,39 @@
+node_modules
+dist
+.env
+.env.local
+.env.*.local
+*.tsbuildinfo
+.vite
+.DS_Store
+*.log
+
+# TypeScript build output (composite project refs)
+apps/**/*.js
+apps/**/*.js.map
+apps/**/*.d.ts
+apps/**/*.d.ts.map
+packages/**/*.js
+packages/**/*.js.map
+packages/**/*.d.ts
+packages/**/*.d.ts.map
+
+# Keep config JS files
+!apps/**/vite.config.ts
+!apps/**/tailwind.config.js
+!apps/**/postcss.config.js
+# Hand-written ambient declarations (vite-env, etc.) live in src, not build output
+!apps/**/vite-env.d.ts
+!packages/**/vite-env.d.ts
+!env.d.ts
+TESTING_CHECKLIST.md
+!CLAUDE.md
+!HANDOFF.md
+_SASA_FEEDBACK_BATCH1.md
+
+# Playwright
+playwright-report/
+test-results/
+
+# Bundle analyzer output
+apps/dashboard/dist/stats.html
