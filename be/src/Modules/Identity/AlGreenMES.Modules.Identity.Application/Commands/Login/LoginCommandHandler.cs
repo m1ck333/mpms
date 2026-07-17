@@ -1,0 +1,179 @@
+using AlGreenMES.BuildingBlocks.Common.Exceptions;
+using AlGreenMES.Modules.Identity.Application.DTOs;
+using AlGreenMES.Modules.Identity.Application.Interfaces;
+using AlGreenMES.Modules.Identity.Application.Services;
+using AlGreenMES.Modules.Identity.Domain.Entities;
+using AlGreenMES.Modules.Identity.Domain.Repositories;
+using Mapster;
+using RefreshTokenEntity = AlGreenMES.Modules.Identity.Domain.Entities.RefreshToken;
+using MediatR;
+
+namespace AlGreenMES.Modules.Identity.Application.Commands.Login;
+
+public class LoginCommandHandler : IRequestHandler<LoginCommand, LoginResponseDto>
+{
+    // Account lockout policy. Tuned for a B2B internal app with manager-set
+    // passwords — 5 tries / 15 min is generous enough that a worker who
+    // mistypes their password won't get locked out on their second wrong
+    // attempt, but tight enough that an unattended password-guess script
+    // gets shut down quickly.
+    private const int LockoutThreshold = 5;
+    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
+    private readonly IUserRepository _userRepository;
+    private readonly IRefreshTokenRepository _refreshTokenRepository;
+    private readonly ILoginAttemptRepository _loginAttemptRepository;
+    private readonly IIdentityUnitOfWork _unitOfWork;
+    private readonly IPasswordHasher _passwordHasher;
+    private readonly IJwtTokenService _jwtTokenService;
+    private readonly ITenantLookupService _tenantLookupService;
+
+    public LoginCommandHandler(
+        IUserRepository userRepository,
+        IRefreshTokenRepository refreshTokenRepository,
+        ILoginAttemptRepository loginAttemptRepository,
+        IIdentityUnitOfWork unitOfWork,
+        IPasswordHasher passwordHasher,
+        IJwtTokenService jwtTokenService,
+        ITenantLookupService tenantLookupService)
+    {
+        _userRepository = userRepository;
+        _refreshTokenRepository = refreshTokenRepository;
+        _loginAttemptRepository = loginAttemptRepository;
+        _unitOfWork = unitOfWork;
+        _passwordHasher = passwordHasher;
+        _jwtTokenService = jwtTokenService;
+        _tenantLookupService = tenantLookupService;
+    }
+
+    public async Task<LoginResponseDto> Handle(LoginCommand request, CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var emailNormalized = (request.Email ?? string.Empty).Trim().ToLowerInvariant();
+
+        // ──────────────────────────────────────────────────────────────
+        // Stage 1: resolve the tenant. Failures here can't blame a user;
+        // we still log the attempt with TenantId=null so audit can see
+        // "someone keeps hitting tenant code 'XYZ' that doesn't exist".
+        // ──────────────────────────────────────────────────────────────
+        var tenant = await _tenantLookupService.GetTenantByCodeAsync(request.TenantCode, cancellationToken);
+        if (tenant == null)
+        {
+            await LogAndSaveAsync(LoginAttempt.RecordFailure(null, emailNormalized, "TENANT_NOT_FOUND", request.IpAddress, request.UserAgent, now), cancellationToken);
+            throw new NotFoundException("Tenant", request.TenantCode);
+        }
+        // tenant.IsActive check is intentionally DEFERRED until after we
+        // know whether the caller is a SuperAdmin (Saša 17.06.2026):
+        // blocking the MPMS / platform tenant for non-payment must not
+        // lock SAs out of recovering the system. The check applies only
+        // to regular users below.
+
+        // ──────────────────────────────────────────────────────────────
+        // Stage 2: resolve the user. If the email doesn't match, we still
+        // log with TenantId set so an admin can later see "this tenant got
+        // hit with these unknown emails".
+        //
+        // SuperAdmin login (Milos 16.06.2026 refactor): SAs are tenantless
+        // (user.TenantId is null in DB), so the tenant-scoped lookup misses
+        // for them. We fall back to a cross-tenant lookup and accept only
+        // if the matched user IS a SuperAdmin. The JWT carries tenant_id =
+        // the tenant code the SA typed (so reads are scoped to that
+        // tenant); the SuperAdminReadOnly middleware blocks writes
+        // everywhere except a small allow-list. Non-SuperAdmin matches
+        // collapse to INVALID_CREDENTIALS so we don't leak "this email
+        // exists somewhere".
+        // ──────────────────────────────────────────────────────────────
+        var user = await _userRepository.GetByEmailAsync(emailNormalized, tenant.Id, cancellationToken);
+        if (user == null)
+        {
+            var crossTenant = await _userRepository.GetByEmailAcrossTenantsAsync(emailNormalized, cancellationToken);
+            if (crossTenant != null && crossTenant.Role == UserRole.SuperAdmin)
+            {
+                user = crossTenant;
+            }
+        }
+        if (user == null)
+        {
+            await LogAndSaveAsync(LoginAttempt.RecordFailure(tenant.Id, emailNormalized, "INVALID_CREDENTIALS", request.IpAddress, request.UserAgent, now), cancellationToken);
+            throw new DomainException("INVALID_CREDENTIALS", "Invalid email or password.");
+        }
+        if (!user.IsActive)
+        {
+            await LogAndSaveAsync(LoginAttempt.RecordFailure(tenant.Id, emailNormalized, "USER_INACTIVE", request.IpAddress, request.UserAgent, now), cancellationToken);
+            throw new DomainException("USER_INACTIVE", "The user account is not active.");
+        }
+
+        // Now apply the deferred tenant-block check — but only for non-SA
+        // users. SuperAdmins bypass this so they can always reach the
+        // platform to unblock a tenant they accidentally blocked.
+        if (!tenant.IsActive && user.Role != UserRole.SuperAdmin)
+        {
+            // Block() and Update(isActive: false) both flip IsActive — they
+            // are distinguished by BlockedAt so the FE can show "Pretplata
+            // istekla, kontaktirajte podršku" vs the generic deactivated
+            // tenant message. The reason itself is SA-only and stays in
+            // the Naplata tab; users only see the bucketed error code.
+            var code = tenant.IsBlocked ? "TENANT_BLOCKED" : "TENANT_INACTIVE";
+            await LogAndSaveAsync(LoginAttempt.RecordFailure(tenant.Id, emailNormalized, code, request.IpAddress, request.UserAgent, now), cancellationToken);
+            throw new DomainException(code, tenant.IsBlocked ? "Tenant subscription is on hold." : "The tenant is not active.");
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Stage 3: lockout check before password verify, so a locked
+        // account never burns CPU on bcrypt for the attacker.
+        // ──────────────────────────────────────────────────────────────
+        if (user.IsLockedOut(now))
+        {
+            await LogAndSaveAsync(LoginAttempt.RecordFailure(tenant.Id, emailNormalized, "ACCOUNT_LOCKED", request.IpAddress, request.UserAgent, now), cancellationToken);
+            throw new DomainException("ACCOUNT_LOCKED", "Account is temporarily locked due to too many failed attempts. Try again later.");
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Stage 4: password compare. On failure, count the attempt; on
+        // success, reset the counter.
+        // ──────────────────────────────────────────────────────────────
+        if (!_passwordHasher.VerifyPassword(request.Password, user.PasswordHash))
+        {
+            user.RegisterFailedLogin(now, LockoutThreshold, LockoutDuration);
+            await _loginAttemptRepository.AddAsync(
+                LoginAttempt.RecordFailure(tenant.Id, emailNormalized, "INVALID_CREDENTIALS", request.IpAddress, request.UserAgent, now),
+                cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            throw new DomainException("INVALID_CREDENTIALS", "Invalid email or password.");
+        }
+
+        user.RegisterSuccessfulLogin();
+
+        // Effective tenant id on the JWT is always the login's target
+        // tenant: for a normal user it equals user.TenantId; for a
+        // SuperAdmin it's whichever tenant they typed at login.
+        var token = _jwtTokenService.GenerateToken(user, tenant.Id);
+        var refreshTokenValue = _jwtTokenService.GenerateRefreshToken();
+
+        var refreshToken = RefreshTokenEntity.Create(
+            tenant.Id,
+            user.Id,
+            refreshTokenValue,
+            now.AddDays(7));
+
+        await _refreshTokenRepository.AddAsync(refreshToken, cancellationToken);
+        await _loginAttemptRepository.AddAsync(
+            LoginAttempt.RecordSuccess(tenant.Id, emailNormalized, request.IpAddress, request.UserAgent, now),
+            cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        var userDto = user.Adapt<UserDto>();
+        return new LoginResponseDto(token, refreshTokenValue, userDto);
+    }
+
+    /// <summary>
+    /// Add the attempt + flush in one shot. Used on the early-exit paths
+    /// (tenant lookup failure, user lookup failure, account lockout)
+    /// where no other state mutates so saving immediately is fine.
+    /// </summary>
+    private async Task LogAndSaveAsync(LoginAttempt attempt, CancellationToken cancellationToken)
+    {
+        await _loginAttemptRepository.AddAsync(attempt, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+}

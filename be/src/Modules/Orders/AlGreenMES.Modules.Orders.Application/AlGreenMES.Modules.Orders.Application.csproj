@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" Version="11.11.0" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.11.0" />
+    <PackageReference Include="Mapster" Version="7.4.0" />
+    <PackageReference Include="Mapster.DependencyInjection" Version="1.0.1" />
+    <PackageReference Include="MediatR" Version="12.4.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AlGreenMES.Modules.Orders.Domain\AlGreenMES.Modules.Orders.Domain.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\AlGreenMES.BuildingBlocks.Common\AlGreenMES.BuildingBlocks.Common.csproj" />
+    <ProjectReference Include="..\..\..\BuildingBlocks\AlGreenMES.BuildingBlocks.EventBus\AlGreenMES.BuildingBlocks.EventBus.csproj" />
+    <ProjectReference Include="..\..\Identity\AlGreenMES.Modules.Identity.Domain\AlGreenMES.Modules.Identity.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

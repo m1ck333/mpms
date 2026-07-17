@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\BuildingBlocks\AlGreenMES.BuildingBlocks.Common\AlGreenMES.BuildingBlocks.Common.csproj" />
+    <ProjectReference Include="..\..\Production\AlGreenMES.Modules.Production.Domain\AlGreenMES.Modules.Production.Domain.csproj" />
+  </ItemGroup>
+
+</Project>
