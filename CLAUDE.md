@@ -28,6 +28,14 @@ monorepo uses `main`).
 only discipline: always promote by merging `staging → main` — never commit new
 work straight to `main`, so the two branches never diverge or conflict.
 
+## Deploy permission — ALWAYS ASK FIRST
+
+**Never run `./deploy.sh` (staging or pilot) on your own initiative. Always ask
+Milos and wait for an explicit go-ahead before any deploy.** This applies to
+both environments, every time — no standing pre-authorization. Committing,
+pushing, and merging are fine; the `deploy.sh` step specifically requires
+asking first.
+
 ## Superseded docs
 
 `fe/HANDOFF.md`, `fe/CLAUDE.md`, and `be/docs/CLAUDE_ONBOARDING.md` predate the
