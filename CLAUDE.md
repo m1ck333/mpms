@@ -53,3 +53,9 @@ conventions and gotchas only, not for branch/deploy workflow.
   conflict. `.env` (gitignored) supplies the deploy host + SSH key.
 - Sentry: org `sky-hard`, project `mes-api` (BE + both FE apps report here,
   split by `environment` tag: `alblue-staging`, `algreen-pilot`).
+- **DB topology:** one Postgres container `algreen-postgres-1` (postgres:16,
+  `127.0.0.1:5432`) hosts **both** databases — `algreen_tracker` (pilot/prod)
+  and `alblue_tracker` (staging). Each API points at its own DB via the
+  connection string in its own `appsettings.Production.json` (gitignored,
+  excluded from `deploy.sh` rsync). The container name is historical — it is
+  **not** algreen-only.
