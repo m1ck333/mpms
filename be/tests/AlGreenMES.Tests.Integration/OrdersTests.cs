@@ -171,9 +171,65 @@ public class OrdersTests : IntegrationTestBase
         fetched.OrderType.Should().NotBe("Standard", "before the DTO fix, Mapster silently coerced unknown codes to Standard");
     }
 
+    // Saša 31.08.2026: the orders-list From/To range can now target Created,
+    // Completed, or Delivery (default). This guards the new dateField branch in
+    // OrderRepository.ApplyDateRangeFilter: each field filters its own column,
+    // Completed excludes not-yet-completed orders (null CompletedAt), and the
+    // To bound is inclusive of the whole day.
+    [Fact]
+    public async Task GetMasterView_DateFieldFilter_TargetsSelectedColumn()
+    {
+        var t = await TestDataSeeder.SeedTenantWithUserAsync(Factory, UserRole.Admin);
+
+        var baseDate = DateTime.UtcNow.Date;
+        var deliveryDate = baseDate.AddDays(30);
+
+        // Order A: delivery +30d, never completed (CompletedAt stays null).
+        var openNumber = $"OPEN-{Guid.NewGuid():N}".Substring(0, 16);
+        await TestDataSeeder.SeedOrderAsync(Factory, t.TenantId, t.UserId, orderNumber: openNumber, deliveryDate: deliveryDate);
+
+        // Order B: same delivery, but completed on +5d.
+        var doneNumber = $"DONE-{Guid.NewGuid():N}".Substring(0, 16);
+        var doneId = await TestDataSeeder.SeedOrderAsync(Factory, t.TenantId, t.UserId, orderNumber: doneNumber, deliveryDate: deliveryDate);
+        await TestDataSeeder.MarkOrderCompletedAsync(Factory, doneId, completedAt: baseDate.AddDays(5));
+
+        var client = await TestDataSeeder.AuthenticatedClientAsync(Factory, t);
+        static string F(DateTime d) => d.ToString("yyyy-MM-dd");
+
+        // delivery in [+20,+40] → both (both have delivery +30)
+        var byDelivery = await GetMasterViewNumbers(client, $"dateField=delivery&dateFrom={F(baseDate.AddDays(20))}&dateTo={F(baseDate.AddDays(40))}");
+        byDelivery.Should().Contain(openNumber).And.Contain(doneNumber);
+
+        // completed in [base,+10] → only the completed one; null CompletedAt excluded
+        var byCompleted = await GetMasterViewNumbers(client, $"dateField=completed&dateFrom={F(baseDate)}&dateTo={F(baseDate.AddDays(10))}");
+        byCompleted.Should().Contain(doneNumber);
+        byCompleted.Should().NotContain(openNumber, "an order with no CompletedAt must not appear in a Completed-date filter");
+
+        // created in [+20,+40] → neither (both created ~today, outside the range)
+        var byCreated = await GetMasterViewNumbers(client, $"dateField=created&dateFrom={F(baseDate.AddDays(20))}&dateTo={F(baseDate.AddDays(40))}");
+        byCreated.Should().NotContain(openNumber).And.NotContain(doneNumber);
+
+        // To bound inclusive: dateTo = the delivery day itself still matches
+        var inclusive = await GetMasterViewNumbers(client, $"dateField=delivery&dateFrom={F(deliveryDate)}&dateTo={F(deliveryDate)}");
+        inclusive.Should().Contain(doneNumber, "the To date must be inclusive of the whole day");
+    }
+
+    private static async Task<List<string>> GetMasterViewNumbers(HttpClient client, string query)
+    {
+        var resp = await client.GetAsync($"/api/orders/master-view?{query}&pageSize=100");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var paged = await resp.Content.ReadFromJsonAsync<PagedOrdersDto>();
+        paged.Should().NotBeNull();
+        return paged!.Items.Select(i => i.OrderNumber).ToList();
+    }
+
     // Minimal shape for deserializing /api/orders responses in these tests.
     // Camel-case JSON (System.Text.Json default) — Newtonsoft's
     // PropertyNameCaseInsensitive isn't applied to ReadFromJsonAsync, so
     // the property names here must match the wire format exactly.
     private sealed record OrderResponseDto(Guid Id, string OrderNumber, string OrderType, string Status);
+
+    // Minimal shape for the paged /api/orders/master-view response.
+    private sealed record PagedOrdersDto(List<MasterRowDto> Items);
+    private sealed record MasterRowDto(Guid Id, string OrderNumber);
 }

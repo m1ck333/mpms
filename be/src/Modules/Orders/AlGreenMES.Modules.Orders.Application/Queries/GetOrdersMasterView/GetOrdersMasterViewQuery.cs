@@ -10,6 +10,7 @@ public record GetOrdersMasterViewQuery : PagedQuery<PagedResult<OrderMasterViewD
     public OrderStatus? Status { get; init; }
     public string? OrderType { get; init; }
     public bool? IsInvoiced { get; init; }
+    public string? DateField { get; init; }
     public DateTime? DateFrom { get; init; }
     public DateTime? DateTo { get; init; }
 }

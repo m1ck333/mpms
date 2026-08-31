@@ -19,7 +19,7 @@ public class GetOrdersQueryHandler : IRequestHandler<GetOrdersQuery, PagedResult
     {
         var result = await _orderRepository.GetPagedAsync(
             request.TenantId, request.Status, request.OrderType,
-            request.DateFrom, request.DateTo, request.Search,
+            request.DateField, request.DateFrom, request.DateTo, request.Search,
             request.GetPage(), request.GetPageSize(), cancellationToken);
 
         return result.MapItems(o => o.Adapt<OrderDto>());

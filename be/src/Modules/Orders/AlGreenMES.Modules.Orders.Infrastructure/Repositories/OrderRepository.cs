@@ -100,7 +100,7 @@ public class OrderRepository : IOrderRepository
             .AnyAsync(o => o.OrderNumber == normalized && o.TenantId == tenantId, cancellationToken);
     }
 
-    public async Task<PagedResult<Order>> GetPagedAsync(Guid tenantId, OrderStatus? status, string? orderType, DateTime? dateFrom, DateTime? dateTo, string? search, int page, int pageSize, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<Order>> GetPagedAsync(Guid tenantId, OrderStatus? status, string? orderType, string? dateField, DateTime? dateFrom, DateTime? dateTo, string? search, int page, int pageSize, CancellationToken cancellationToken = default)
     {
         var query = _dbContext.Orders
             .Include(o => o.Items)
@@ -112,17 +112,7 @@ public class OrderRepository : IOrderRepository
         if (!string.IsNullOrEmpty(orderType))
             query = query.Where(o => o.OrderType == orderType);
 
-        if (dateFrom.HasValue)
-        {
-            var from = DateTime.SpecifyKind(dateFrom.Value.Date, DateTimeKind.Utc);
-            query = query.Where(o => o.DeliveryDate >= from);
-        }
-
-        if (dateTo.HasValue)
-        {
-            var to = DateTime.SpecifyKind(dateTo.Value.Date.AddDays(1), DateTimeKind.Utc);
-            query = query.Where(o => o.DeliveryDate < to);
-        }
+        query = ApplyDateRangeFilter(query, dateField, dateFrom, dateTo);
 
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -139,7 +129,7 @@ public class OrderRepository : IOrderRepository
         return await query.ToPagedResultAsync(page, pageSize, cancellationToken);
     }
 
-    public async Task<PagedResult<Order>> GetPagedWithProcessesAsync(Guid tenantId, OrderStatus? status, string? orderType, bool? isInvoiced, DateTime? dateFrom, DateTime? dateTo, string? search, string? sortBy, bool isDescending, int page, int pageSize, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<Order>> GetPagedWithProcessesAsync(Guid tenantId, OrderStatus? status, string? orderType, bool? isInvoiced, string? dateField, DateTime? dateFrom, DateTime? dateTo, string? search, string? sortBy, bool isDescending, int page, int pageSize, CancellationToken cancellationToken = default)
     {
         // AsSplitQuery() avoids a cartesian explosion across the 4-level
         // Items → Processes → SubProcesses → Logs include chain (which also
@@ -170,17 +160,7 @@ public class OrderRepository : IOrderRepository
         if (isInvoiced.HasValue)
             query = query.Where(o => o.IsInvoiced == isInvoiced.Value);
 
-        if (dateFrom.HasValue)
-        {
-            var from = DateTime.SpecifyKind(dateFrom.Value.Date, DateTimeKind.Utc);
-            query = query.Where(o => o.DeliveryDate >= from);
-        }
-
-        if (dateTo.HasValue)
-        {
-            var to = DateTime.SpecifyKind(dateTo.Value.Date.AddDays(1), DateTimeKind.Utc);
-            query = query.Where(o => o.DeliveryDate < to);
-        }
+        query = ApplyDateRangeFilter(query, dateField, dateFrom, dateTo);
 
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -231,5 +211,39 @@ public class OrderRepository : IOrderRepository
         }
 
         return await sorted.ToPagedResultAsync(page, pageSize, cancellationToken);
+    }
+
+    // Applies the From/To range to whichever date column the caller picked.
+    // dateField: "created" → CreatedAt, "completed" → CompletedAt, anything
+    // else (incl. null) → DeliveryDate (the historical default). Filtering on
+    // CompletedAt naturally drops not-yet-completed orders (it's nullable),
+    // which is the intended "what was completed in this range" behaviour.
+    // SpecifyKind(..., Utc) is mandatory — Postgres columns are timestamptz
+    // and the pre-commit hook forbids ambiguous DateTime.Kind (see CLAUDE.md).
+    private static IQueryable<Order> ApplyDateRangeFilter(IQueryable<Order> query, string? dateField, DateTime? dateFrom, DateTime? dateTo)
+    {
+        if (dateFrom.HasValue)
+        {
+            var from = DateTime.SpecifyKind(dateFrom.Value.Date, DateTimeKind.Utc);
+            query = dateField?.ToLowerInvariant() switch
+            {
+                "created" => query.Where(o => o.CreatedAt >= from),
+                "completed" => query.Where(o => o.CompletedAt >= from),
+                _ => query.Where(o => o.DeliveryDate >= from),
+            };
+        }
+
+        if (dateTo.HasValue)
+        {
+            var to = DateTime.SpecifyKind(dateTo.Value.Date.AddDays(1), DateTimeKind.Utc);
+            query = dateField?.ToLowerInvariant() switch
+            {
+                "created" => query.Where(o => o.CreatedAt < to),
+                "completed" => query.Where(o => o.CompletedAt < to),
+                _ => query.Where(o => o.DeliveryDate < to),
+            };
+        }
+
+        return query;
     }
 }
