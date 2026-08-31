@@ -167,6 +167,7 @@
   },
   "orders": {
     "title": "Narudžbine",
+    "filterByDate": "Filter po datumu",
     "orderNumber": "Br. narudžbine",
     "export": {
       "progress": "Napredak (kompletirano/ukupno)",
@@ -787,6 +788,7 @@
     "type": "Tip",
     "dateFrom": "Od datuma",
     "dateTo": "Do datuma",
+    "dateField": "Filter po datumu",
     "isActive": "Aktivan",
     "role": "Uloga"
   },

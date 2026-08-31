@@ -167,6 +167,7 @@
   },
   "orders": {
     "title": "Orders",
+    "filterByDate": "Filter by date",
     "orderNumber": "Order #",
     "export": {
       "progress": "Progress (done/total)",
@@ -786,6 +787,7 @@
     "type": "Type",
     "dateFrom": "From",
     "dateTo": "To",
+    "dateField": "Filter by date",
     "isActive": "Active",
     "role": "Role"
   },

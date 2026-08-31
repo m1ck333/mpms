@@ -15,6 +15,9 @@ export interface OrdersQuery {
   orderType?: OrderType;
   isInvoiced?: boolean;
   search?: string;
+  // Which date column dateFrom/dateTo filter on. Omitted/undefined keeps the
+  // BE default (delivery deadline), so existing callers are unaffected.
+  dateField?: 'created' | 'completed' | 'delivery';
   dateFrom?: string;
   dateTo?: string;
   page?: number;

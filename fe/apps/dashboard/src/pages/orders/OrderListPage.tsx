@@ -4,9 +4,9 @@ import { PendingFileThumbnail } from '../../components/PendingFileThumbnail';
 import {
   Typography, Table, Button, Space, Select, Tag, Drawer, Form, Input,
   InputNumber, DatePicker, App, Row, Col, Spin, Popconfirm, Divider,
-  Tooltip, Progress, Statistic, Upload, List, Modal, Card, Popover, Checkbox, theme,
+  Tooltip, Progress, Statistic, Upload, List, Modal, Card, Popover, Checkbox, Radio, theme,
 } from 'antd';
-import { PlusOutlined, DeleteOutlined, CheckOutlined, PaperClipOutlined, UndoOutlined, UploadOutlined, CloseCircleOutlined, FilePdfOutlined, EyeOutlined, CopyOutlined, FullscreenOutlined, FullscreenExitOutlined, QuestionCircleOutlined, EditOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, CheckOutlined, PaperClipOutlined, UndoOutlined, UploadOutlined, CloseCircleOutlined, FilePdfOutlined, EyeOutlined, CopyOutlined, FullscreenOutlined, FullscreenExitOutlined, QuestionCircleOutlined, EditOutlined, FilterFilled } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useAuthStore } from '@alblue/auth';
 import { OrderStatus, OrderType, ProcessStatus, ComplexityType, UserRole } from '@alblue/shared-types';
@@ -66,6 +66,9 @@ export function OrderListPage() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [dateFrom, setDateFrom] = useState<dayjs.Dayjs | null>(null);
   const [dateTo, setDateTo] = useState<dayjs.Dayjs | null>(null);
+  // Which date column the From/To range filters on (Saša 2026-08). Default
+  // 'delivery' = Rok isporuke, preserving the prior hard-wired behaviour.
+  const [dateField, setDateField] = useState<'created' | 'completed' | 'delivery'>('delivery');
   const [page, setPage] = useState(1);
   const [sortBy, setSortBy] = useState<string | undefined>('priority');
   const [sortDirection, setSortDirection] = useState<string | undefined>('asc');
@@ -79,15 +82,16 @@ export function OrderListPage() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, orderTypeFilter, isInvoicedFilter, dateFrom, dateTo]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, orderTypeFilter, isInvoicedFilter, dateFrom, dateTo, dateField]);
 
   const { data: masterResult, isLoading } = useQuery({
-    queryKey: ['orders-master-view', tenantId, statusFilter, orderTypeFilter, isInvoicedFilter, debouncedSearch, dateFrom?.format('YYYY-MM-DD'), dateTo?.format('YYYY-MM-DD'), page, pageSize, sortBy, sortDirection],
+    queryKey: ['orders-master-view', tenantId, statusFilter, orderTypeFilter, isInvoicedFilter, debouncedSearch, dateField, dateFrom?.format('YYYY-MM-DD'), dateTo?.format('YYYY-MM-DD'), page, pageSize, sortBy, sortDirection],
     queryFn: () => ordersApi.getMasterView({
       status: statusFilter,
       orderType: orderTypeFilter,
       isInvoiced: isInvoicedFilter,
       search: debouncedSearch || undefined,
+      dateField,
       dateFrom: dateFrom?.format('YYYY-MM-DD'),
       dateTo: dateTo?.format('YYYY-MM-DD'),
       page,
@@ -368,8 +372,9 @@ export function OrderListPage() {
     if (isInvoicedFilter !== undefined) filters.push({ label: t('orders.invoiced'), value: isInvoicedFilter ? t('common:actions.yes') : t('common:actions.no') });
     if (dateFrom) filters.push({ label: t('export.dateFrom'), value: dateFrom.format('DD.MM.YYYY.') });
     if (dateTo) filters.push({ label: t('export.dateTo'), value: dateTo.format('DD.MM.YYYY.') });
+    if (dateFrom || dateTo) filters.push({ label: t('export.dateField'), value: dateField === 'created' ? t('common:labels.created') : dateField === 'completed' ? t('common:labels.completed') : t('common:labels.deliveryDate') });
     return filters;
-  }, [debouncedSearch, statusFilter, orderTypeFilter, isInvoicedFilter, dateFrom, dateTo, t, tEnum]);
+  }, [debouncedSearch, statusFilter, orderTypeFilter, isInvoicedFilter, dateFrom, dateTo, dateField, t, tEnum]);
 
   const fetchAllOrders = async (): Promise<OrderMasterViewDto[]> => {
     const { data } = await ordersApi.getMasterView({
@@ -377,6 +382,7 @@ export function OrderListPage() {
       orderType: orderTypeFilter,
       isInvoiced: isInvoicedFilter,
       search: debouncedSearch || undefined,
+      dateField,
       dateFrom: dateFrom?.format('YYYY-MM-DD'),
       dateTo: dateTo?.format('YYYY-MM-DD'),
       page: 1,
@@ -386,6 +392,19 @@ export function OrderListPage() {
     });
     return data.items;
   };
+
+  // Radio group rendered inside both date-picker popovers (Saša 2026-08):
+  // lets the user choose which date column the From/To range applies to.
+  const dateFieldFooter = () => (
+    <div style={{ padding: '6px 4px' }}>
+      <div style={{ fontSize: 12, marginBottom: 4 }}>{t('orders.filterByDate')}</div>
+      <Radio.Group value={dateField} onChange={(e) => setDateField(e.target.value)} size="small">
+        <Radio value="created">{t('common:labels.created')}</Radio>
+        <Radio value="completed">{t('common:labels.completed')}</Radio>
+        <Radio value="delivery">{t('common:labels.deliveryDate')}</Radio>
+      </Radio.Group>
+    </div>
+  );
 
   const queryClient = useQueryClient();
 
@@ -607,6 +626,24 @@ export function OrderListPage() {
   // ─── Master table columns ──────────────────────────────
 
   const masterColumns: ColumnsType<OrderMasterViewDto> = useMemo(() => {
+    // Funnel indicator on a column header when a filter targets that column,
+    // so the active filter (esp. which date field) is visible without opening
+    // the picker. Tooltip shows the active value/range.
+    const dateRangeTip = dateFrom && dateTo
+      ? `${dateFrom.format('DD.MM.YYYY.')} – ${dateTo.format('DD.MM.YYYY.')}`
+      : dateFrom ? `≥ ${dateFrom.format('DD.MM.YYYY.')}`
+      : dateTo ? `≤ ${dateTo.format('DD.MM.YYYY.')}` : '';
+    const dateActive = !!dateFrom || !!dateTo;
+    const filteredTitle = (label: string, active: boolean, tip: string) =>
+      active ? (
+        <Space size={4}>
+          {label}
+          <Tooltip title={tip}>
+            <FilterFilled style={{ color: token.colorPrimary, fontSize: 11 }} />
+          </Tooltip>
+        </Space>
+      ) : label;
+
     const base: ColumnsType<OrderMasterViewDto> = [
       {
         title: t('common:labels.priority'),
@@ -635,7 +672,7 @@ export function OrderListPage() {
         ),
       },
       {
-        title: t('orders.orderType'),
+        title: filteredTitle(t('orders.orderType'), orderTypeFilter !== undefined, orderTypeFilter !== undefined ? (orderTypeByCode.get(String(orderTypeFilter).toUpperCase())?.name ?? tEnum('OrderType', orderTypeFilter)) : ''),
         dataIndex: 'orderType',
         width: 90,
         sorter: true,
@@ -647,7 +684,7 @@ export function OrderListPage() {
         ),
       },
       {
-        title: t('common:labels.status'),
+        title: filteredTitle(t('common:labels.status'), statusFilter !== undefined, statusFilter !== undefined ? tEnum('OrderStatus', statusFilter) : ''),
         dataIndex: 'status',
         width: 110,
         sorter: true,
@@ -655,7 +692,7 @@ export function OrderListPage() {
         render: (status) => <StatusBadge status={status} />,
       },
       {
-        title: t('common:labels.created'),
+        title: filteredTitle(t('common:labels.created'), dateActive && dateField === 'created', dateRangeTip),
         dataIndex: 'createdAt',
         width: 105,
         render: (d: string) => d ? dayjs(d).format('DD.MM.YYYY.') : '—',
@@ -663,7 +700,7 @@ export function OrderListPage() {
         sortOrder: sortBy === 'createdAt' ? (sortDirection === 'desc' ? 'descend' : 'ascend') : null,
       },
       {
-        title: t('common:labels.completed'),
+        title: filteredTitle(t('common:labels.completed'), dateActive && dateField === 'completed', dateRangeTip),
         dataIndex: 'completedAt',
         width: 105,
         render: (d: string | null) => d ? dayjs(d).format('DD.MM.YYYY.') : '—',
@@ -671,7 +708,7 @@ export function OrderListPage() {
         sortOrder: sortBy === 'completedAt' ? (sortDirection === 'desc' ? 'descend' : 'ascend') : null,
       },
       {
-        title: t('orders.invoiced'),
+        title: filteredTitle(t('orders.invoiced'), isInvoicedFilter !== undefined, isInvoicedFilter !== undefined ? (isInvoicedFilter ? t('common:actions.yes') : t('common:actions.no')) : ''),
         dataIndex: 'isInvoiced',
         width: 90,
         align: 'center' as const,
@@ -699,7 +736,7 @@ export function OrderListPage() {
         ),
       },
       {
-        title: t('common:labels.deliveryDate'),
+        title: filteredTitle(t('common:labels.deliveryDate'), dateActive && dateField === 'delivery', dateRangeTip),
         dataIndex: 'deliveryDate',
         width: 110,
         sorter: true,
@@ -785,7 +822,7 @@ export function OrderListPage() {
     ];
 
     return [...base, ...completionCol, ...processColDefs];
-  }, [processes, statusFilter, sortBy, sortDirection, t, tEnum]);
+  }, [processes, statusFilter, orderTypeFilter, isInvoicedFilter, dateField, dateFrom, dateTo, sortBy, sortDirection, t, tEnum]);
 
   // ─── Drawer detail helpers ─────────────────────────────
 
@@ -921,14 +958,18 @@ export function OrderListPage() {
           onChange={setDateFrom}
           format="DD.MM.YYYY"
           allowClear
+          showWeek
           placeholder={t('common:labels.dateFrom')}
+          renderExtraFooter={dateFieldFooter}
         />
         <DatePicker
           value={dateTo}
           onChange={setDateTo}
           format="DD.MM.YYYY"
           allowClear
+          showWeek
           placeholder={t('common:labels.dateTo')}
+          renderExtraFooter={dateFieldFooter}
         />
       </div>
 

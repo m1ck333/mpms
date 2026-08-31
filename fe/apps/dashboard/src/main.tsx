@@ -10,8 +10,25 @@ import './styles/global.css';
 import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { initSentry } from './sentry';
+import dayjs from 'dayjs';
+import updateLocale from 'dayjs/plugin/updateLocale';
+import weekOfYear from 'dayjs/plugin/weekOfYear';
+import weekday from 'dayjs/plugin/weekday';
+import localeData from 'dayjs/plugin/localeData';
+import 'dayjs/locale/sr';
 
 initSentry();
+
+// Saša (2026-08): all calendars start on Monday and show ISO week numbers.
+// weekStart:1 = Monday; yearStart:4 = ISO-8601 week-of-year (week 1 is the
+// one containing Jan 4). antd/rc-picker read week start + week() from the
+// active dayjs locale, so this drives every DatePicker in the app.
+dayjs.extend(updateLocale);
+dayjs.extend(weekOfYear);
+dayjs.extend(weekday);
+dayjs.extend(localeData);
+dayjs.updateLocale('en', { weekStart: 1, yearStart: 4 });
+dayjs.updateLocale('sr', { weekStart: 1, yearStart: 4 });
 
 setOnForceLogout(() => useAuthStore.getState().logout());
 
