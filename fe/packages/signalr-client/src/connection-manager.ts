@@ -81,11 +81,22 @@ export async function startConnection(): Promise<void> {
       notifyConnectionReady();
     })
     .catch((err) => {
-      // Ignore the harmless "not in Disconnected state" error from StrictMode double-mount
-      if (
-        err instanceof Error &&
-        err.message.includes('not in the \'Disconnected\' state')
-      ) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Swallow benign, self-recovering connection-lifecycle errors instead of
+      // re-throwing (which surfaces as an unhandled promise rejection):
+      //  - StrictMode double-mount ("not in the 'Disconnected' state")
+      //  - connection aborted mid-handshake / mid-negotiation (component
+      //    unmount, navigation, or a tablet's wifi dropping at shift start)
+      // Recovery is automatic (withAutomaticReconnect) and the app polls as a
+      // safety net, so none of these are actionable.
+      const benign =
+        msg.includes('not in the \'Disconnected\' state') ||
+        msg.includes('Handshake was canceled') ||
+        msg.includes('Server returned handshake error') ||
+        msg.includes('stopped during negotiation') ||
+        msg.includes('connection was stopped');
+      if (benign) {
+        console.warn('SignalR start skipped (transient):', msg);
         return;
       }
       console.error('SignalR connection failed:', err);

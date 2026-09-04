@@ -19,6 +19,19 @@ export function initSentry() {
     tracesSampleRate: 0.1,
     replaysSessionSampleRate: 0.0,
     replaysOnErrorSampleRate: 1.0,
+    // Benign/expected errors that are never actionable — filtered so real
+    // issues aren't buried. Realtime (SignalR) churn is normal (shift-start
+    // reconnects, sleep/wake, flaky wifi); auto-reconnect + polling fallback
+    // mean a dropped realtime connection is not a user-facing bug.
+    ignoreErrors: [
+      'Server returned handshake error',
+      'Handshake was canceled',
+      'stopped during negotiation',
+      'connection was stopped before the hub handshake could complete',
+      'Server timeout elapsed without receiving a message',
+      'ResizeObserver loop limit exceeded',
+      'ResizeObserver loop completed with undelivered notifications',
+    ],
     beforeSend(event) {
       if (event.breadcrumbs) {
         event.breadcrumbs.forEach((bc) => {
