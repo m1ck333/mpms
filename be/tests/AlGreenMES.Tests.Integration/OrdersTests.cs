@@ -214,6 +214,27 @@ public class OrdersTests : IntegrationTestBase
         inclusive.Should().Contain(doneNumber, "the To date must be inclusive of the whole day");
     }
 
+    // Regression (Mile, 2026-10): dashboard exports fetch with pageSize 10000 to
+    // mean "give me everything", but two separate caps (PagedQuery.GetPageSize
+    // AND QueryableExtensions.ToPagedResultAsync) each clamped to 100, so exports
+    // silently truncated to the first 100 rows. Seed >100 orders and assert the
+    // export-sized request returns them all.
+    [Fact]
+    public async Task GetMasterView_ExportPageSize_IsNotCappedAt100()
+    {
+        var t = await TestDataSeeder.SeedTenantWithUserAsync(Factory, UserRole.Admin);
+        for (var i = 0; i < 101; i++)
+            await TestDataSeeder.SeedOrderAsync(Factory, t.TenantId, t.UserId);
+
+        var client = await TestDataSeeder.AuthenticatedClientAsync(Factory, t);
+
+        var resp = await client.GetAsync("/api/orders/master-view?page=1&pageSize=10000");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var paged = await resp.Content.ReadFromJsonAsync<PagedOrdersDto>();
+        paged.Should().NotBeNull();
+        paged!.Items.Count.Should().BeGreaterThan(100, "a pageSize:10000 export request must return all rows, not be capped at 100");
+    }
+
     private static async Task<List<string>> GetMasterViewNumbers(HttpClient client, string query)
     {
         var resp = await client.GetAsync($"/api/orders/master-view?{query}&pageSize=100");

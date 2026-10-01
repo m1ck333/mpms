@@ -12,7 +12,11 @@ public static class QueryableExtensions
         CancellationToken cancellationToken = default)
     {
         var safePage = page < 1 ? 1 : page;
-        var safePageSize = pageSize < 1 ? 20 : pageSize > 100 ? 100 : pageSize;
+        // Same bounds as PagedQuery.GetPageSize — a mismatch here silently caps
+        // exports (pageSize: 10000 = "fetch all"). See PaginationDefaults.
+        var safePageSize = pageSize < 1 ? PaginationDefaults.DefaultPageSize
+            : pageSize > PaginationDefaults.MaxPageSize ? PaginationDefaults.MaxPageSize
+            : pageSize;
 
         var totalCount = await query.CountAsync(cancellationToken);
 
