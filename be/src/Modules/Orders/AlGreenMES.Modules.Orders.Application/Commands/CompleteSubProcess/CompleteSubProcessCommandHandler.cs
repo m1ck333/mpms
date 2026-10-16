@@ -12,17 +12,20 @@ namespace AlGreenMES.Modules.Orders.Application.Commands.CompleteSubProcess;
 public class CompleteSubProcessCommandHandler : IRequestHandler<CompleteSubProcessCommand, OrderItemSubProcessDto>
 {
     private readonly IOrderItemSubProcessRepository _subProcessRepository;
+    private readonly IOrderRepository _orderRepository;
     private readonly IOrdersUnitOfWork _unitOfWork;
     private readonly IProductionEventService _eventService;
     private readonly IProcessedActionStore _idempotency;
 
     public CompleteSubProcessCommandHandler(
         IOrderItemSubProcessRepository subProcessRepository,
+        IOrderRepository orderRepository,
         IOrdersUnitOfWork unitOfWork,
         IProductionEventService eventService,
         IProcessedActionStore idempotency)
     {
         _subProcessRepository = subProcessRepository;
+        _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
         _eventService = eventService;
         _idempotency = idempotency;
@@ -83,6 +86,20 @@ public class CompleteSubProcessCommandHandler : IRequestHandler<CompleteSubProce
 
         if (parentCompleted)
         {
+            // Completing the parent process may finish the whole order. Mirror
+            // CompleteProcessCommandHandler's order-completion check here — the
+            // sub-process path previously skipped it, so orders whose final
+            // process has sub-processes stayed Active with no CompletedAt
+            // (Mile, 2026-10: ~31 ALGREEN orders stuck "Aktivan" after all
+            // processes were done).
+            var order = await _orderRepository.GetByIdWithFullDetailsAsync(
+                process.OrderItem.Order.Id, cancellationToken);
+            if (order != null && order.Items.All(i => i.IsCompleted()))
+            {
+                order.MarkCompleted();
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+
             await _eventService.NotifyProcessCompletedAsync(
                 new ProcessCompletedEvent(
                     process.Id,

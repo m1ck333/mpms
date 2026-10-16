@@ -156,6 +156,30 @@ public class WorkflowTests : IntegrationTestBase
         oip.Status.Should().Be(ProcessStatus.Completed, "the parent OIP auto-completes when its last sub-process finishes");
     }
 
+    [Fact]
+    public async Task CompleteSubProcess_FinishingOrdersLastProcess_CompletesTheOrder()
+    {
+        // Regression (Mile, 2026-10): when an order's final process has sub-processes,
+        // completing the last sub-process auto-completed the parent process but left
+        // the ORDER stuck Active with no CompletedAt — the sub-process handler never
+        // ran the order-completion check that CompleteProcessCommandHandler does.
+        // ~31 ALGREEN orders were stuck "Aktivan" after all their work was done.
+        var (t, oipId, processId) = await SeedActiveOrderWithProcessReturningProcessIdAsync(ProcessStatus.InProgress);
+        var orderId = await GetParentOrderIdAsync(oipId);
+        var oispId = await TestDataSeeder.SeedOrderItemSubProcessAsync(Factory, oipId, processId);
+        var client = await TestDataSeeder.AuthenticatedClientAsync(Factory, t);
+
+        await client.PostAsJsonAsync($"/api/order-item-sub-processes/{oispId}/start", new { userId = t.UserId });
+        var completeResp = await client.PostAsJsonAsync($"/api/order-item-sub-processes/{oispId}/complete", new { userId = t.UserId });
+        completeResp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var scope = Factory.Services.CreateScope();
+        var ordersDb = scope.ServiceProvider.GetRequiredService<OrdersDbContext>();
+        var order = await ordersDb.Orders.IgnoreQueryFilters().SingleAsync(o => o.Id == orderId);
+        order.Status.Should().Be(OrderStatus.Completed, "finishing the order's only process via its sub-process must complete the order");
+        order.CompletedAt.Should().NotBeNull("a completed order must get an end date");
+    }
+
     // ---------------------------------------------------------------------
     // Order state mutations: pause/resume/reopen. Coordinators trigger
     // these from the dashboard; pause/resume gates by status, reopen is
