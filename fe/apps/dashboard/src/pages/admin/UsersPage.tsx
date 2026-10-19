@@ -226,7 +226,9 @@ export function UsersPage({ hideHeader = false }: UsersPageProps = {}) {
         // Saša 08.06.2026 — extra roles beyond primary (e.g. Coordinator +
         // Magacioner). Send the array unconditionally so clearing is
         // explicit; BE keys off non-null to know "user touched this field".
-        additionalRoles: (values.additionalRoles as UserRole[] | undefined) ?? [],
+        // Only SuperAdmin may edit it — omit for others so a plain name edit
+        // by a tenant Admin never looks like a role change.
+        additionalRoles: isSuperAdmin ? ((values.additionalRoles as UserRole[] | undefined) ?? []) : undefined,
       });
       const newPassword = (values.newPassword as string)?.trim();
       if (newPassword) {

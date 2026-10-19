@@ -79,6 +79,55 @@ public class IdentityAuthzTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task UpdateUser_AdminRenamesWorker_WithUnchangedEmptyAdditionalRoles_Succeeds()
+    {
+        // Mile 19.10.2026 — the dashboard always sends additionalRoles (often
+        // []). An unchanged list must not count as a role change for Admins.
+        var admin = await TestDataSeeder.SeedTenantWithUserAsync(Factory, UserRole.Admin);
+        var workerId = await TestDataSeeder.SeedAdditionalUserAsync(Factory, admin.TenantId, UserRole.Coordinator);
+        var client = await TestDataSeeder.AuthenticatedClientAsync(Factory, admin);
+
+        var resp = await client.PutAsJsonAsync($"/api/users/{workerId}", new
+        {
+            firstName = "Renamed",
+            lastName = "Worker",
+            role = "Coordinator",
+            isActive = true,
+            canIncludeWithdrawnInAnalysis = false,
+            processIds = (List<Guid>?)null,
+            additionalRoles = Array.Empty<string>(),
+        });
+
+        resp.EnsureSuccessStatusCode();
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<IdentityDbContext>();
+        var saved = await db.Users.IgnoreQueryFilters().SingleAsync(u => u.Id == workerId);
+        saved.FirstName.Should().Be("Renamed");
+    }
+
+    [Fact]
+    public async Task UpdateUser_AdminAddsAdditionalRole_Returns403()
+    {
+        var admin = await TestDataSeeder.SeedTenantWithUserAsync(Factory, UserRole.Admin);
+        var workerId = await TestDataSeeder.SeedAdditionalUserAsync(Factory, admin.TenantId, UserRole.Coordinator);
+        var client = await TestDataSeeder.AuthenticatedClientAsync(Factory, admin);
+
+        var resp = await client.PutAsJsonAsync($"/api/users/{workerId}", new
+        {
+            firstName = "T",
+            lastName = "User",
+            role = "Coordinator",
+            isActive = true,
+            canIncludeWithdrawnInAnalysis = false,
+            processIds = (List<Guid>?)null,
+            additionalRoles = new[] { "Magacioner" },
+        });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("FORBIDDEN_ROLE_CHANGE");
+    }
+
+    [Fact]
     public async Task UpdateUser_SuperAdminChangesRole_Succeeds_F7Negative()
     {
         var superAdmin = await TestDataSeeder.SeedTenantWithUserAsync(Factory, UserRole.SuperAdmin);

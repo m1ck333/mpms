@@ -87,6 +87,14 @@ public class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand, UserD
                 throw new DomainException("LAST_ADMIN_REMOVAL", "Cannot remove the last active Admin from the tenant.");
         }
 
+        // Only an actual difference counts as an additional-roles change. The
+        // dashboard always sends the current list (often []), so a plain
+        // name edit by a tenant Admin must not trip the SuperAdmin-only gate
+        // (Mile 19.10.2026 — couldn't rename workers).
+        var isAdditionalRolesChange = request.AdditionalRoles != null
+            && !request.AdditionalRoles.Where(r => r != request.Role).ToHashSet()
+                .SetEquals(user.AdditionalRoles.Select(a => a.Role).Where(r => r != request.Role));
+
         user.Update(request.FirstName, request.LastName, request.Role, request.IsActive, request.CanIncludeWithdrawnInAnalysis);
 
         if (request.Role == UserRole.Department && request.ProcessIds != null)
@@ -97,16 +105,16 @@ public class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand, UserD
         // Multi-role assignment (Saša 08.06.2026). Null = leave existing
         // additional roles alone; non-null = replace them with the given
         // list. Same caller-authorisation gate as primary role.
-        if (request.AdditionalRoles != null)
-        {
-            if (!isCallerSuperAdmin)
-                throw new ForbiddenException("FORBIDDEN_ROLE_CHANGE", "Only SuperAdmin can change a user's additional roles.");
+        if (isAdditionalRolesChange && !isCallerSuperAdmin)
+            throw new ForbiddenException("FORBIDDEN_ROLE_CHANGE", "Only SuperAdmin can change a user's additional roles.");
+        // Re-assign on a primary-role change too, so an extra role that just
+        // became the primary is dropped from the additional list.
+        if (request.AdditionalRoles != null && (isAdditionalRolesChange || isRoleChange))
             user.AssignAdditionalRoles(request.TenantId, request.AdditionalRoles);
-        }
 
         // Sprint 3.0 F-3 — revoke outstanding refresh tokens when role changes
         // so the affected user can't keep an old-role session alive via refresh.
-        if (isRoleChange || request.AdditionalRoles != null)
+        if (isRoleChange || isAdditionalRolesChange)
             await _refreshTokenRepository.RevokeAllForUserAsync(user.Id, cancellationToken);
 
         // F-9 — primary role transition history. Captures the (old, new,
